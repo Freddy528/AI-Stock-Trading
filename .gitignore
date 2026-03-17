@@ -1,0 +1,24 @@
+# 数据文件（避免大文件上传）
+data/*.csv
+data/*.xlsx
+data/*.json
+!data/account.json
+data/*.parquet
+
+# 环境
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
