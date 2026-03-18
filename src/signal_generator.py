@@ -378,11 +378,11 @@ def _build_prompt(signal_type, market_data, watchlist_data, account_summary, sca
 
 ## 交易规则
 - 模拟账户，初始资金 ¥10,000
-- 风格：{STYLE}
+- 风格：{STYLE}（激进型）
 - 最大持仓：{MAX_POSITIONS} 只
 - 单股仓位上限：{int(MAX_SINGLE_POSITION_PCT * 100)}%
 - 选股范围：沪市主板(60开头) + 深市主板(000/001开头)，排除ST/科创/创业板
-- **T+1规则（严格遵守）**：当日买入的股票，当日不能卖出。对于**今日新买入**的持仓，不要输出止损/止盈价格，等次日盘前结合开盘情况再给出具体的止损止盈策略。
+- 佣金：万1；卖出额外收印花税万5
 
 ## 策略（严格遵守，这是最新版策略，所有选股和操作决策必须依据此策略）
 {strategies_content}
