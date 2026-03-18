@@ -47,7 +47,7 @@ def buy(code, name, price, shares):
     """买入股票"""
     account = load_account()
     cost = price * shares
-    commission = max(cost * 0.00025, 5)  # 佣金万2.5，最低5元
+    commission = cost * 0.0001  # 佣金万1
     total_cost = cost + commission
 
     if total_cost > account["cash"]:
@@ -102,12 +102,20 @@ def sell(code, price, shares):
         return False
 
     pos = account["positions"][code]
+
+    # T+1 规则：今天买的股票明天才能卖
+    buy_date = pos.get("buy_date", "")
+    today = datetime.now().strftime("%Y-%m-%d")
+    if buy_date == today:
+        print(f"❌ T+1限制：{pos['name']}({code}) 今日买入，最早明日才能卖出")
+        return False
+
     if shares > pos["shares"]:
         print(f"❌ 持有 {pos['shares']} 股，不足卖出 {shares} 股")
         return False
 
     revenue = price * shares
-    commission = max(revenue * 0.00025, 5)  # 佣金
+    commission = max(revenue * 0.0001, 5)  # 佣金万1
     stamp_tax = revenue * 0.0005  # 印花税万5（卖出收取）
     net_revenue = revenue - commission - stamp_tax
 
