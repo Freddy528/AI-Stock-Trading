@@ -1,0 +1,17 @@
+{
+  "date": "2026-03-19",
+  "by_model": {
+    "gpt-5.2": {
+      "prompt_tokens": 66349,
+      "completion_tokens": 3601,
+      "total_tokens": 69950,
+      "call_count": 9
+    }
+  },
+  "summary": {
+    "prompt_tokens": 66349,
+    "completion_tokens": 3601,
+    "total_tokens": 69950,
+    "call_count": 9
+  }
+}

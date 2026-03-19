@@ -2,16 +2,16 @@
   "date": "2026-03-18",
   "by_model": {
     "gpt-5.2": {
-      "prompt_tokens": 8965,
-      "completion_tokens": 2648,
-      "total_tokens": 11613,
-      "call_count": 6
+      "prompt_tokens": 20194,
+      "completion_tokens": 4950,
+      "total_tokens": 25144,
+      "call_count": 7
     }
   },
   "summary": {
-    "prompt_tokens": 8965,
-    "completion_tokens": 2648,
-    "total_tokens": 11613,
-    "call_count": 6
+    "prompt_tokens": 20194,
+    "completion_tokens": 4950,
+    "total_tokens": 25144,
+    "call_count": 7
   }
 }

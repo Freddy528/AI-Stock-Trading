@@ -20,5 +20,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Logs（保留目录结构，忽略日志内容）
+logs/*.log
+
 # Jupyter
 .ipynb_checkpoints/

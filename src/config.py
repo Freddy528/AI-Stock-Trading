@@ -30,6 +30,7 @@ SIGNAL_SCHEDULE = [
     {"hour": 12, "minute": 58, "type": "intraday",    "label": "盘中"},
     {"hour": 13, "minute": 58, "type": "intraday",    "label": "盘中"},
     {"hour": 14, "minute": 48, "type": "pre_close",   "label": "盘尾"},
+    {"hour": 16, "minute": 56, "type": "daily_summary", "label": "每日总结"},
 ]
 
 # === LLM API 配置 ===
@@ -37,6 +38,10 @@ LLM_API_URL = "http://yy.dbh.baidu-int.com/v1/chat/completions"
 LLM_API_KEY = "sk-nSrK5A85C6hAWfrqQbPrmokbJ02s5E0NP1cTGHT3HQF4zOGX"
 LLM_MODEL = "gpt-5.2"
 LLM_MAX_CONCURRENCY = 10
+
+# === 风险控制 ===
+STOP_LOSS_PCT = -0.08              # 单笔止损 -8%
+DRAWDOWN_PAUSE_THRESHOLD = 8500    # 总资产低于此值暂停买入（-15% 回撤）
 
 # === 风格 ===
 STYLE = "aggressive"          # conservative / balanced / aggressive

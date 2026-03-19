@@ -45,8 +45,16 @@
 - 数据文件放在 `data/` 目录下（注意 .gitignore 排除大文件）
 - 提交信息使用中文，简洁明了
 
+## 每日经验总结自动化（16:56）
+- **触发**：工作日 16:56 由 scheduler 自动执行 `summary_generator.generate_daily_summary()`
+- **输入**：市场情绪、当日信号、关注列表表现、账户状态、全市场扫描 TOP20、当前策略、经验教训
+- **输出**：`docs/daily-summary/YYYY-MM-DD.md`（结构化每日总结）
+- **自动回写**：LLM 输出中的策略迭代建议（JSON 格式）自动追加到 `memory/strategies.md` 迭代日志
+- **手动执行**：`python src/summary_generator.py` 或 `python src/scheduler.py now --type daily_summary`
+- **Token 用量**：自动记录到 `token-usage/YYYY-MM-DD-聚合api.json`
+
 ## 每日复盘模板（收盘后必做）
-复盘文件：`docs/daily/YYYY-MM-DD.md`，内容包含：
+复盘文件：`docs/daily-summary/YYYY-MM-DD.md`，内容包含：
 1. **大盘概况**：指数涨跌、涨跌家数、涨停/跌停数、情绪判断
 2. **涨得好的票**：
    - 连板龙头排行（连板数、行业、点评）

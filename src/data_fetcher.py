@@ -44,15 +44,34 @@ def _sina_quote(codes):
             symbol = match.group(1)
             fields = match.group(2).split(",")
             if len(fields) >= 32:
+                def _sf(val):
+                    try:
+                        return float(val) if val else 0
+                    except (ValueError, TypeError):
+                        return 0
+
                 results[symbol] = {
                     "名称": fields[0],
-                    "今开": float(fields[1]) if fields[1] else 0,
-                    "昨收": float(fields[2]) if fields[2] else 0,
-                    "最新价": float(fields[3]) if fields[3] else 0,
-                    "最高": float(fields[4]) if fields[4] else 0,
-                    "最低": float(fields[5]) if fields[5] else 0,
-                    "成交量": int(float(fields[8])) if fields[8] else 0,
-                    "成交额": float(fields[9]) if fields[9] else 0,
+                    "今开": _sf(fields[1]),
+                    "昨收": _sf(fields[2]),
+                    "最新价": _sf(fields[3]),
+                    "最高": _sf(fields[4]),
+                    "最低": _sf(fields[5]),
+                    "竞买价": _sf(fields[6]),
+                    "竞卖价": _sf(fields[7]),
+                    "成交量": int(_sf(fields[8])),
+                    "成交额": _sf(fields[9]),
+                    # 五档买卖盘
+                    "买一量": int(_sf(fields[10])), "买一价": _sf(fields[11]),
+                    "买二量": int(_sf(fields[12])), "买二价": _sf(fields[13]),
+                    "买三量": int(_sf(fields[14])), "买三价": _sf(fields[15]),
+                    "买四量": int(_sf(fields[16])), "买四价": _sf(fields[17]),
+                    "买五量": int(_sf(fields[18])), "买五价": _sf(fields[19]),
+                    "卖一量": int(_sf(fields[20])), "卖一价": _sf(fields[21]),
+                    "卖二量": int(_sf(fields[22])), "卖二价": _sf(fields[23]),
+                    "卖三量": int(_sf(fields[24])), "卖三价": _sf(fields[25]),
+                    "卖四量": int(_sf(fields[26])), "卖四价": _sf(fields[27]),
+                    "卖五量": int(_sf(fields[28])), "卖五价": _sf(fields[29]),
                     "日期": fields[30],
                     "时间": fields[31],
                 }
@@ -164,8 +183,26 @@ def _eastmoney_quote(codes):
 
 
 # ============================================================
-# 指数行情（主+备）
+# 指数行情（主+备，午休直接用新浪避免akshare卡死）
 # ============================================================
+def _is_lunch_break():
+    """判断是否在午休时段（11:30-13:00），此时akshare(东方财富)不稳定"""
+    now = datetime.now()
+    minutes = now.hour * 60 + now.minute
+    return 11 * 60 + 25 <= minutes <= 13 * 60 + 5
+
+
+def _get_index_sina():
+    """新浪获取指数（最稳定）"""
+    sina = _sina_quote(["sh000001", "sz399001", "sz399006"])
+    result = {}
+    mapping = {"sh000001": "上证指数", "sz399001": "深证成指", "sz399006": "创业板指"}
+    for k, name in mapping.items():
+        if k in sina:
+            result[name] = {"price": sina[k]["最新价"], "change_pct": sina[k]["涨跌幅"]}
+    return result if result else None
+
+
 @retry(max_retries=2, delay=1)
 def _get_index_akshare():
     """akshare获取指数"""
@@ -173,7 +210,17 @@ def _get_index_akshare():
 
 
 def get_index_quotes():
-    """获取主要指数行情，akshare失败自动切新浪"""
+    """获取主要指数行情，午休优先新浪，正常时段优先akshare"""
+    # 午休直接走新浪，避免akshare卡100+秒
+    if _is_lunch_break():
+        try:
+            result = _get_index_sina()
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # 正常时段：akshare优先
     try:
         df = _get_index_akshare()
         result = {}
@@ -187,17 +234,14 @@ def get_index_quotes():
     except Exception:
         pass
 
-    # 备用：新浪
+    # 最终备用：新浪
     try:
-        sina = _sina_quote(["sh000001", "sz399001", "sz399006"])
-        result = {}
-        mapping = {"sh000001": "上证指数", "sz399001": "深证成指", "sz399006": "创业板指"}
-        for k, name in mapping.items():
-            if k in sina:
-                result[name] = {"price": sina[k]["最新价"], "change_pct": sina[k]["涨跌幅"]}
-        return result
+        result = _get_index_sina()
+        if result:
+            return result
     except Exception:
-        return {}
+        pass
+    return {}
 
 
 # ============================================================
@@ -326,6 +370,20 @@ def get_stocks_realtime_batch(codes):
 
 
 # ============================================================
+# 盘前集合竞价分时数据
+# ============================================================
+@retry(max_retries=2, delay=1)
+def get_pre_market_minutes(code):
+    """获取盘前集合竞价分时数据（09:15-09:25），来源东方财富"""
+    df = ak.stock_zh_a_hist_pre_min_em(
+        symbol=code, start_time="09:00:00", end_time="09:30:00"
+    )
+    if df is not None and not df.empty:
+        return df
+    return None
+
+
+# ============================================================
 # 个股历史K线
 # ============================================================
 @retry(max_retries=3, delay=2)
@@ -341,62 +399,108 @@ def get_stock_history(code, period="daily", days=120):
 # ============================================================
 # 市场情绪（主+备）
 # ============================================================
+def _market_breadth_from_sina():
+    """从新浪全市场数据计算涨跌家数（午休/盘前最稳定）"""
+    all_stocks = _fetch_all_stocks_sina()
+    if not all_stocks:
+        return None
+    mainboard = _filter_mainboard(all_stocks)
+    total = len(mainboard)
+    if total == 0:
+        return None
+    up = len([s for s in mainboard if float(s.get("changepercent", 0)) > 0])
+    down = len([s for s in mainboard if float(s.get("changepercent", 0)) < 0])
+    flat = total - up - down
+    limit_up = len([s for s in mainboard if float(s.get("changepercent", 0)) >= 9.9])
+    limit_down = len([s for s in mainboard if float(s.get("changepercent", 0)) <= -9.9])
+    return {
+        "source": "新浪",
+        "total": total, "up": up, "down": down, "flat": flat,
+        "limit_up": limit_up, "limit_down": limit_down,
+        "up_ratio": round(up / total * 100, 1),
+    }
+
+
 def get_market_sentiment():
-    """获取市场情绪指标，多数据源容错"""
+    """获取市场情绪指标，优先新浪（最稳定），akshare备用"""
     result = {}
 
-    # 涨跌家数统计（akshare）
+    # 涨跌家数统计：优先新浪（午休/盘前不卡），失败再 akshare
+    breadth = None
     try:
-        df = _get_spot_akshare()
-        total = len(df)
-        up = len(df[df["涨跌幅"] > 0])
-        down = len(df[df["涨跌幅"] < 0])
-        flat = total - up - down
-        limit_up = len(df[df["涨跌幅"] >= 9.9])
-        limit_down = len(df[df["涨跌幅"] <= -9.9])
-        result["market_breadth"] = {
-            "total": total, "up": up, "down": down, "flat": flat,
-            "limit_up": limit_up, "limit_down": limit_down,
-            "up_ratio": round(up / total * 100, 1),
-        }
-    except Exception as e:
-        result["market_breadth_error"] = str(e)
-        # 备用1：新浪全市场数据
+        breadth = _market_breadth_from_sina()
+    except Exception:
+        pass
+
+    if breadth is None:
         try:
-            all_stocks = _fetch_all_stocks_sina()
-            mainboard = _filter_mainboard(all_stocks)
-            total = len(mainboard)
-            up = len([s for s in mainboard if float(s.get("changepercent", 0)) > 0])
-            down = len([s for s in mainboard if float(s.get("changepercent", 0)) < 0])
+            df = _get_spot_akshare()
+            total = len(df)
+            up = len(df[df["涨跌幅"] > 0])
+            down = len(df[df["涨跌幅"] < 0])
             flat = total - up - down
-            limit_up = len([s for s in mainboard if float(s.get("changepercent", 0)) >= 9.9])
-            limit_down = len([s for s in mainboard if float(s.get("changepercent", 0)) <= -9.9])
-            result["market_breadth"] = {
-                "source": "sina_fallback",
+            limit_up = len(df[df["涨跌幅"] >= 9.9])
+            limit_down = len(df[df["涨跌幅"] <= -9.9])
+            breadth = {
+                "source": "东方财富",
                 "total": total, "up": up, "down": down, "flat": flat,
                 "limit_up": limit_up, "limit_down": limit_down,
-                "up_ratio": round(up / total * 100, 1) if total > 0 else 0,
+                "up_ratio": round(up / total * 100, 1),
             }
         except Exception:
-            # 备用2：北向汇总
-            try:
-                df = ak.stock_hsgt_fund_flow_summary_em()
-                row = df[df["板块"] == "沪股通"].iloc[0]
-                up = int(row.get("上涨数", 0))
-                down = int(row.get("下跌数", 0))
-                flat = int(row.get("持平数", 0))
-                result["market_breadth_partial"] = {
-                    "source": "hsgt_summary(仅沪股通)",
-                    "up": up, "down": down, "flat": flat,
-                }
-            except Exception:
-                pass
+            pass
+
+    if breadth is None:
+        # 最后备用：北向汇总（部分数据）
+        try:
+            df = ak.stock_hsgt_fund_flow_summary_em()
+            row = df[df["板块"] == "沪股通"].iloc[0]
+            breadth = {
+                "source": "北向汇总(仅沪股通)",
+                "up": int(row.get("上涨数", 0)),
+                "down": int(row.get("下跌数", 0)),
+                "flat": int(row.get("持平数", 0)),
+            }
+        except Exception:
+            pass
+
+    if breadth:
+        result["market_breadth"] = breadth
+        # 超跌信号检测
+        oversold = detect_oversold_signal(breadth)
+        if oversold["is_oversold"]:
+            result["oversold_signal"] = oversold
+    else:
+        result["market_breadth_error"] = "所有数据源均失败"
 
     # 主要指数
     index_data = get_index_quotes()
     result.update(index_data)
 
     return result
+
+
+def detect_oversold_signal(breadth: dict) -> dict:
+    """
+    超跌反弹信号检测。
+    条件：上涨家数 < 1000 且 跌停数(不含ST) < 20
+    注：breadth 来自 _market_breadth_from_sina/_filter_mainboard，已排除 ST。
+    """
+    up = breadth.get("up", 9999)
+    limit_down = breadth.get("limit_down", 9999)
+
+    is_oversold = (up < 1000 and limit_down < 20)
+
+    return {
+        "is_oversold": is_oversold,
+        "up_count": up,
+        "limit_down_ex_st": limit_down,
+        "signal": "超跌反弹" if is_oversold else "正常",
+        "description": (
+            f"上涨家数仅{up}家(<1000)，跌停{limit_down}家(<20，不含ST)，"
+            "市场阴跌非恐慌崩盘，适合介入强势股博次日反弹"
+        ) if is_oversold else "",
+    }
 
 
 # ============================================================
@@ -434,13 +538,71 @@ def get_board_concept_flow():
     return ak.stock_board_concept_name_em()
 
 
+def _get_sector_flow_sina():
+    """新浪行业板块涨跌排行（午休/盘前均可用）"""
+    url = "http://money.finance.sina.com.cn/q/view/newSinaHy.php"
+    headers = {"Referer": "https://finance.sina.com.cn", "User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, timeout=10, headers=headers)
+    r.encoding = "gbk"
+    # 解析 JS 变量: var S_Finance_bankuai_sinaindustry = {...}
+    import json as _json
+    text = r.text.strip()
+    eq_pos = text.find("=")
+    if eq_pos < 0:
+        return None
+    json_str = text[eq_pos + 1:].strip().rstrip(";")
+    data = _json.loads(json_str)
+    # data: {node: "node,name,count,avg_price,change_pct,change_rate,volume,amount,leader_code,leader_chg,leader_price,leader_change,leader_name"}
+    rows = []
+    for node, val in data.items():
+        parts = val.split(",")
+        if len(parts) >= 13:
+            rows.append({
+                "板块名称": parts[1],
+                "涨跌幅": float(parts[4]) if parts[4] else 0,
+                "成交量": int(float(parts[6])) if parts[6] else 0,
+                "成交额": float(parts[7]) if parts[7] else 0,
+                "领涨股": f"{parts[12]}({parts[8]}) {parts[9]}%",
+            })
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    df = df.sort_values("涨跌幅", ascending=False)
+    return df.head(20)
+
+
 def get_sector_flow():
-    """获取板块资金流向"""
+    """获取板块资金流向，午休优先新浪，正常时段三级 fallback"""
+    # 午休直接走新浪（akshare在午休全线不稳定）
+    if _is_lunch_break():
+        try:
+            result = _get_sector_flow_sina()
+            if result is not None:
+                return result
+        except Exception:
+            pass
+
+    # 正常时段：akshare资金流向排名
     try:
         df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
-        return df.head(20)
+        if df is not None and not df.empty:
+            return df.head(20)
     except Exception:
-        return None
+        pass
+    # 备用1：akshare行业板块涨跌排名
+    try:
+        df = ak.stock_board_industry_name_em()
+        if df is not None and not df.empty:
+            cols = [c for c in ["板块名称", "涨跌幅", "总市值", "换手率", "领涨股票"] if c in df.columns]
+            return df[cols].head(20) if cols else df.head(20)
+    except Exception:
+        pass
+    # 最终备用：新浪行业板块
+    try:
+        return _get_sector_flow_sina()
+    except Exception:
+        pass
+    return None
 
 
 # ============================================================
@@ -524,8 +686,15 @@ def calculate_technical_indicators(df):
 # ============================================================
 # 全市场扫描（新浪批量接口，稳定可靠）
 # ============================================================
+_sina_all_stocks_cache = {"data": [], "ts": 0}
+
+
 def _fetch_all_stocks_sina():
-    """通过新浪批量接口获取全市场A股行情"""
+    """通过新浪批量接口获取全市场A股行情（含单页重试，连续失败容忍，120秒缓存）"""
+    # 120秒内复用缓存，避免 generate_signal 中重复拉取
+    if _sina_all_stocks_cache["data"] and (time.time() - _sina_all_stocks_cache["ts"]) < 120:
+        return _sina_all_stocks_cache["data"]
+    import json as _json
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0",
@@ -535,24 +704,38 @@ def _fetch_all_stocks_sina():
     url = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
 
     all_stocks = []
+    consecutive_failures = 0
     for page in range(1, 80):
         params = {
             "page": page, "num": 80,
             "sort": "changepercent", "asc": 0,
             "node": "hs_a", "symbol": "", "_s_r_a": "ssd",
         }
-        try:
-            r = session.get(url, params=params, timeout=15)
-            import json
-            data = json.loads(r.text)
-            if not data:
+        success = False
+        for attempt in range(3):  # 单页最多重试3次
+            try:
+                r = session.get(url, params=params, timeout=15)
+                data = _json.loads(r.text)
+                if not data:
+                    # 空数据说明已到最后一页
+                    _sina_all_stocks_cache.update({"data": all_stocks, "ts": time.time()})
+                    return all_stocks
+                all_stocks.extend(data)
+                consecutive_failures = 0
+                success = True
                 break
-            all_stocks.extend(data)
-        except Exception:
-            break
+            except Exception:
+                if attempt < 2:
+                    time.sleep(1)
+        if not success:
+            consecutive_failures += 1
+            # 连续3页失败才放弃，否则跳过继续
+            if consecutive_failures >= 3:
+                break
         if page % 20 == 0:
             time.sleep(0.5)
 
+    _sina_all_stocks_cache.update({"data": all_stocks, "ts": time.time()})
     return all_stocks
 
 
@@ -570,115 +753,174 @@ def _filter_mainboard(stocks):
             float(s.get("trade", 0)) > 0]
 
 
+def _score_candidate(code, name, price, change_pct, turnover, amount, high, low,
+                     prev_close, pe=0, pb=0, market_cap=0, source="全市场扫描"):
+    """对单只候选股计算综合评分，返回 dict 或 None（不符合条件）"""
+    # 基础过滤
+    if not (1 <= change_pct <= 8):
+        return None
+    if turnover < 2:
+        return None
+    if amount < 50000000:
+        return None
+    if price < 3 or price > 100:
+        return None
+
+    # 振幅（盘中波动）
+    amplitude = round((high - low) / prev_close * 100, 2) if prev_close > 0 else 0
+
+    # 综合评分
+    score = 0
+    if 3 <= change_pct <= 6:
+        score += 30
+    elif 2 <= change_pct < 3:
+        score += 20
+    else:
+        score += 15
+    if 3 <= turnover <= 10:
+        score += 25
+    elif turnover > 10:
+        score += 15
+    else:
+        score += 10
+    amount_yi = amount / 1e8
+    if amount_yi >= 5:
+        score += 25
+    elif amount_yi >= 2:
+        score += 20
+    elif amount_yi >= 1:
+        score += 15
+    else:
+        score += 10
+    if 3 <= amplitude <= 8:
+        score += 10
+    if 0 < pe < 30:
+        score += 10
+    elif 0 < pe < 50:
+        score += 5
+
+    return {
+        "code": code, "name": name, "price": price,
+        "change_pct": change_pct, "turnover_rate": turnover,
+        "amount": amount, "amount_yi": round(amount_yi, 2),
+        "amplitude": amplitude, "high": high, "low": low,
+        "open": 0, "prev_close": prev_close,
+        "pe": pe, "pb": pb, "market_cap": market_cap,
+        "score": score, "source": source,
+    }
+
+
+def _scan_via_sina(exclude_codes, top_n):
+    """新浪数据源全市场扫描。返回 None=数据获取失败，[]=有数据但无候选"""
+    all_stocks = _fetch_all_stocks_sina()
+    if not all_stocks:
+        return None
+    mainboard = _filter_mainboard(all_stocks)
+    candidates = []
+    for s in mainboard:
+        code = s.get("code", "")
+        if code in exclude_codes:
+            continue
+        c = _score_candidate(
+            code=code, name=s.get("name", ""),
+            price=float(s.get("trade", 0)),
+            change_pct=float(s.get("changepercent", 0)),
+            turnover=float(s.get("turnoverratio", 0)),
+            amount=float(s.get("amount", 0)),
+            high=float(s.get("high", 0)),
+            low=float(s.get("low", 0)),
+            prev_close=float(s.get("settlement", 0)),
+            pe=float(s.get("per", 0)),
+            pb=float(s.get("pb", 0)),
+            market_cap=float(s.get("nmc", 0)) * 10000,
+            source="全市场扫描(新浪)",
+        )
+        if c:
+            c["open"] = float(s.get("open", 0))
+            candidates.append(c)
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates[:top_n]
+
+
+def _scan_via_akshare(exclude_codes, top_n):
+    """akshare(东方财富)数据源全市场扫描。返回 None=数据获取失败，[]=有数据但无候选"""
+    df = get_stock_list()  # 已含 retry + 过滤 ST/科创/创业板
+    if df is None or df.empty:
+        return None
+    candidates = []
+    for _, row in df.iterrows():
+        code = row.get("代码", "")
+        if code in exclude_codes:
+            continue
+
+        def _safe(val, default=0):
+            try:
+                v = float(val)
+                return v if pd.notna(v) else default
+            except (ValueError, TypeError):
+                return default
+
+        c = _score_candidate(
+            code=code, name=row.get("名称", ""),
+            price=_safe(row.get("最新价")),
+            change_pct=_safe(row.get("涨跌幅")),
+            turnover=_safe(row.get("换手率")),
+            amount=_safe(row.get("成交额")),
+            high=_safe(row.get("最高")),
+            low=_safe(row.get("最低")),
+            prev_close=_safe(row.get("昨收")),
+            pe=_safe(row.get("市盈率-动态")),
+            pb=_safe(row.get("市净率")),
+            market_cap=_safe(row.get("总市值")),
+            source="全市场扫描(东方财富)",
+        )
+        if c:
+            c["open"] = _safe(row.get("今开"))
+            candidates.append(c)
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates[:top_n]
+
+
 def scan_market_candidates(exclude_codes=None, top_n=15):
     """
     全市场扫描，筛选激进型短线候选股。
-    返回 list[dict]，每个 dict 包含股票基本数据 + 筛选得分。
-
-    筛选条件（激进型）：
-    1. 涨幅 1~8%（有动量但不追涨停）
-    2. 换手率 > 2%（活跃交易）
-    3. 成交额 > 5000万（流动性保障）
-    4. 量比信息（新浪接口无量比，用换手率代替活跃度）
-    排序：综合评分 = 涨幅得分 + 换手率得分 + 成交额得分
+    数据源优先级：新浪批量接口 > akshare(东方财富)，自动 fallback + 重试。
     """
     if exclude_codes is None:
         exclude_codes = set()
     else:
         exclude_codes = set(exclude_codes)
 
-    # 1. 获取全市场数据
-    all_stocks = _fetch_all_stocks_sina()
-    if not all_stocks:
-        return []
+    for attempt in range(2):
+        if attempt > 0:
+            print(f"    全市场扫描: 第{attempt+1}轮重试（等待3秒避免限频）...")
+            time.sleep(3)
 
-    # 2. 过滤主板
-    mainboard = _filter_mainboard(all_stocks)
+        # 主：新浪（分页批量，速度快）
+        try:
+            result = _scan_via_sina(exclude_codes, top_n)
+            if result is not None and len(result) > 0:
+                print(f"    全市场扫描: 新浪源成功, {len(result)}只候选")
+                return result
+            elif result is not None:
+                print(f"    全市场扫描: 新浪有数据但无符合条件候选（可能非交易时段）")
+            else:
+                print(f"    全市场扫描: 新浪源数据获取失败, 切换备用源...")
+        except Exception as e:
+            print(f"    全市场扫描: 新浪源异常({e}), 切换备用源...")
 
-    # 3. 量化筛选
-    candidates = []
-    for s in mainboard:
-        code = s.get("code", "")
-        if code in exclude_codes:
-            continue
+        # 备用：akshare（东方财富 API，稍慢但稳定）
+        try:
+            result = _scan_via_akshare(exclude_codes, top_n)
+            if result is not None and len(result) > 0:
+                print(f"    全市场扫描: 东方财富源成功, {len(result)}只候选")
+                return result
+            elif result is not None:
+                print(f"    全市场扫描: 东方财富有数据但无符合条件候选")
+            else:
+                print(f"    全市场扫描: 东方财富源数据获取失败")
+        except Exception as e:
+            print(f"    全市场扫描: 东方财富源异常({e})")
 
-        change_pct = float(s.get("changepercent", 0))
-        turnover = float(s.get("turnoverratio", 0))
-        amount = float(s.get("amount", 0))
-        price = float(s.get("trade", 0))
-        high = float(s.get("high", 0))
-        low = float(s.get("low", 0))
-        prev_close = float(s.get("settlement", 0))
-
-        # 基础过滤
-        if not (1 <= change_pct <= 8):
-            continue
-        if turnover < 2:
-            continue
-        if amount < 50000000:
-            continue
-        if price < 3 or price > 100:
-            continue
-
-        # 振幅（盘中波动）
-        amplitude = round((high - low) / prev_close * 100, 2) if prev_close > 0 else 0
-
-        # 综合评分
-        score = 0
-        # 涨幅得分：3-6% 最优
-        if 3 <= change_pct <= 6:
-            score += 30
-        elif 2 <= change_pct < 3:
-            score += 20
-        else:
-            score += 15
-        # 换手率得分：3-10% 最优
-        if 3 <= turnover <= 10:
-            score += 25
-        elif turnover > 10:
-            score += 15
-        else:
-            score += 10
-        # 成交额得分（亿级加分）
-        amount_yi = amount / 1e8
-        if amount_yi >= 5:
-            score += 25
-        elif amount_yi >= 2:
-            score += 20
-        elif amount_yi >= 1:
-            score += 15
-        else:
-            score += 10
-        # 振幅合理性（3-8%活跃不乱）
-        if 3 <= amplitude <= 8:
-            score += 10
-        # 低市盈率加分
-        pe = float(s.get("per", 0))
-        if 0 < pe < 30:
-            score += 10
-        elif 0 < pe < 50:
-            score += 5
-
-        candidates.append({
-            "code": code,
-            "name": s.get("name", ""),
-            "price": price,
-            "change_pct": change_pct,
-            "turnover_rate": turnover,
-            "amount": amount,
-            "amount_yi": round(amount_yi, 2),
-            "amplitude": amplitude,
-            "high": high,
-            "low": low,
-            "open": float(s.get("open", 0)),
-            "prev_close": prev_close,
-            "pe": pe,
-            "pb": float(s.get("pb", 0)),
-            "market_cap": float(s.get("nmc", 0)) * 10000,
-            "score": score,
-            "source": "全市场扫描",
-        })
-
-    # 4. 按得分排序，取 top_n
-    candidates.sort(key=lambda x: x["score"], reverse=True)
-    return candidates[:top_n]
+    print("    全市场扫描: 所有数据源+重试均失败")
+    return []

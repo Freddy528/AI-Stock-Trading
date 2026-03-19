@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from config import SIGNAL_SCHEDULE
 from signal_generator import generate_signal
+from summary_generator import generate_daily_summary
 
 
 def _is_trading_day():
@@ -25,10 +26,14 @@ def run_signal_job(signal_type, label):
         return
 
     try:
-        filepath, content = generate_signal(signal_type, label)
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {label}信号生成完毕: {filepath}")
+        if signal_type == "daily_summary":
+            filepath, content = generate_daily_summary()
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] {label}生成完毕: {filepath}")
+        else:
+            filepath, content = generate_signal(signal_type, label)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] {label}信号生成完毕: {filepath}")
     except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {label}信号生成失败: {e}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {label}任务失败: {e}")
 
 
 def start_scheduler():
@@ -73,6 +78,8 @@ def start_scheduler():
 
 def run_once(signal_type=None, label=None):
     """手动执行一次（用于测试）"""
+    if signal_type == "daily_summary":
+        return generate_daily_summary()
     if signal_type and label:
         return generate_signal(signal_type, label)
 
@@ -109,7 +116,7 @@ if __name__ == "__main__":
 
     # python scheduler.py now [--type TYPE]  — 立即生成一次
     now_parser = sub.add_parser("now", help="立即生成一次信号")
-    now_parser.add_argument("--type", choices=["pre_market", "intraday", "pre_close"],
+    now_parser.add_argument("--type", choices=["pre_market", "intraday", "pre_close", "daily_summary"],
                             help="指定信号类型，不指定则根据当前时间自动判断")
     now_parser.add_argument("--label", help="信号标签")
 
