@@ -78,7 +78,7 @@ def _get_account_summary():
             pending_info.append(
                 f"挂单 {o['name']}({o['code']}) {o['shares']}股 限价{o['limit_price']}"
             )
-    snapshots = account.get("snapshots", [])
+    snapshots = account.get("daily_snapshots", [])
     recent_snapshots = snapshots[-5:] if snapshots else []
     return {
         "cash": account["cash"],

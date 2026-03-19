@@ -14,20 +14,22 @@ from account import load_account, buy, sell
 PROJECT_ROOT = os.path.join(os.path.dirname(__file__), "..")
 LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 
-# 配置日志
+# 配置日志（防止重复挂载 handler）
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 exec_logger = logging.getLogger("execution")
-exec_handler = logging.FileHandler(os.path.join(LOGS_DIR, "execution.log"), encoding="utf-8")
-exec_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-exec_logger.addHandler(exec_handler)
-exec_logger.setLevel(logging.INFO)
+if not exec_logger.handlers:
+    exec_handler = logging.FileHandler(os.path.join(LOGS_DIR, "execution.log"), encoding="utf-8")
+    exec_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    exec_logger.addHandler(exec_handler)
+    exec_logger.setLevel(logging.INFO)
 
 err_logger = logging.getLogger("errors")
-err_handler = logging.FileHandler(os.path.join(LOGS_DIR, "errors.log"), encoding="utf-8")
-err_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-err_logger.addHandler(err_handler)
-err_logger.setLevel(logging.WARNING)
+if not err_logger.handlers:
+    err_handler = logging.FileHandler(os.path.join(LOGS_DIR, "errors.log"), encoding="utf-8")
+    err_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    err_logger.addHandler(err_handler)
+    err_logger.setLevel(logging.WARNING)
 
 
 def execute(signal_content: str, signal_type: str) -> dict:
@@ -72,7 +74,11 @@ def execute(signal_content: str, signal_type: str) -> dict:
         for action in actions:
             # 重新加载账户（前一个操作可能已修改）
             account = load_account()
-            current_prices = _get_current_prices(account)
+            # 复用已有价格，仅为新出现的持仓补充获取
+            for code in account.get("positions", {}):
+                if code not in current_prices:
+                    current_prices.update(_get_current_prices(account))
+                    break
             total_assets = _calc_total_assets(account, current_prices)
 
             # 熔断：禁买允卖
@@ -122,6 +128,11 @@ def _parse_actions(content: str) -> list[dict]:
     # 都失败
     if "不操作" in content or "hold" in content.lower():
         return []  # 明确不操作
+
+    # LLM API 失败返回的错误信息，不记为解析失败
+    if "LLM API 不可用" in content or "API 调用失败" in content:
+        _log_error("llm_api_error", "LLM API 不可用，本次不执行", content[:200])
+        return []
 
     _log_error("parse_failure", "无法从 LLM 输出解析交易动作", content[:300])
     return []
@@ -185,13 +196,11 @@ def _validate_action(action: dict, account: dict, current_prices: dict, total_as
         if not (code.startswith("60") or code.startswith("000") or code.startswith("001")):
             return False, f"代码 {code} 不在交易范围（仅 60/000/001）"
 
-        # 5. RSI >= 70 禁止买入（从 action 的补充信息检查）
-        rsi = action.get("rsi")
+        # 5. RSI >= 70 禁止买入（实时获取技术指标验证）
+        # 6. 距 20 日低点涨幅 > 30% 禁止买入
+        rsi, gain_from_low = _fetch_risk_indicators(code)
         if rsi is not None and rsi >= 70:
             return False, f"RSI={rsi:.1f} >= 70，超买禁止买入"
-
-        # 6. 距 20 日低点涨幅 > 30% 禁止买入
-        gain_from_low = action.get("gain_from_20d_low")
         if gain_from_low is not None and gain_from_low > 30:
             return False, f"距20日低点涨幅 {gain_from_low:.1f}% > 30%，位置偏高"
 
@@ -307,6 +316,35 @@ def _check_stop_loss(account: dict, current_prices: dict) -> list[dict]:
                 })
 
     return results
+
+
+def _fetch_risk_indicators(code: str) -> tuple:
+    """获取个股 RSI 和距 20 日低点涨幅，用于代码级硬性规则验证。
+    返回 (rsi, gain_from_20d_low)，获取失败返回 (None, None)。
+    """
+    try:
+        from data_fetcher import get_stock_history, calculate_technical_indicators, get_stock_realtime
+        hist = get_stock_history(code, days=60)
+        if hist is None or hist.empty or len(hist) < 5:
+            return None, None
+
+        hist = calculate_technical_indicators(hist)
+        latest = hist.iloc[-1]
+        rsi = latest.get("RSI")
+
+        # 距 20 日低点涨幅
+        gain_from_low = None
+        low_20d = hist["最低"].tail(20).min() if "最低" in hist.columns else None
+        if low_20d and low_20d > 0:
+            realtime = get_stock_realtime(code)
+            current_price = float(realtime.get("最新价", 0) or 0) if realtime else 0
+            if current_price > 0:
+                gain_from_low = (current_price - low_20d) / low_20d * 100
+
+        return rsi, gain_from_low
+    except Exception as e:
+        _log_error("risk_indicator_error", f"获取{code}风控指标失败: {e}")
+        return None, None
 
 
 def _calc_shares(total_assets: float, position_pct: float, price: float) -> int:

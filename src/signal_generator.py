@@ -826,20 +826,23 @@ def generate_signal(signal_type="intraday", label="盘中"):
     # 7. 保存信号文件
     filepath = _save_signal(signal_type, label, content)
 
-    # 8. 自动执行交易信号
-    print("  执行交易信号...")
-    try:
-        from signal_executor import execute, format_execution_report
-        exec_report = execute(content, signal_type)
-        # 追加执行报告到信号文件
-        report_text = format_execution_report(exec_report)
-        with open(filepath, "a", encoding="utf-8") as f:
-            f.write(report_text)
-        executed_count = len(exec_report.get("executed", []))
-        rejected_count = len(exec_report.get("rejected", []))
-        print(f"  执行结果: {executed_count} 笔成功, {rejected_count} 笔被拒绝")
-    except Exception as e:
-        print(f"  ⚠️ 信号执行失败: {e}")
+    # 8. 自动执行交易信号（盘前信号仅做分析，不自动执行——集合竞价阶段价格不稳定）
+    if signal_type == "pre_market":
+        print("  盘前信号：仅分析，不自动执行（集合竞价价格不稳定）")
+    else:
+        print("  执行交易信号...")
+        try:
+            from signal_executor import execute, format_execution_report
+            exec_report = execute(content, signal_type)
+            # 追加执行报告到信号文件
+            report_text = format_execution_report(exec_report)
+            with open(filepath, "a", encoding="utf-8") as f:
+                f.write(report_text)
+            executed_count = len(exec_report.get("executed", []))
+            rejected_count = len(exec_report.get("rejected", []))
+            print(f"  执行结果: {executed_count} 笔成功, {rejected_count} 笔被拒绝")
+        except Exception as e:
+            print(f"  ⚠️ 信号执行失败: {e}")
 
     print(f"  完成!\n")
     return filepath, content

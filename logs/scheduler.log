@@ -1,103 +1,50 @@
-  已注册任务: 盘前 @ 09:25 (pre_market)
-  已注册任务: 盘中 @ 10:00 (intraday)
-  已注册任务: 盘中 @ 11:00 (intraday)
-  已注册任务: 盘中 @ 13:00 (intraday)
-  已注册任务: 盘中 @ 14:00 (intraday)
-  已注册任务: 盘尾 @ 14:50 (pre_close)
-
-============================================================
-交易信号调度器已启动
-共 6 个定时任务
-信号输出目录: signals/YYYY-MM-DD/
-按 Ctrl+C 停止
-============================================================
-
-
-============================================================
-[09:25:00] 开始生成交易信号 - 盘前
-============================================================
-  采集市场数据...
-  0%|          | 0/58 [00:00<?, ?it/s]  2%|▏         | 1/58 [00:01<01:25,  1.50s/it]  3%|▎         | 2/58 [00:07<04:01,  4.32s/it]                                                获取关注股票实时行情(6只)...
-  调用 LLM 生成分析...
-  Token 用量已记录: prompt=622, completion=338, total=960
-  信号已保存: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/09-26-盘前.md
-  完成!
-
-[09:26:06] 盘前信号生成完毕: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/09-26-盘前.md
-
-============================================================
-[10:00:00] 开始生成交易信号 - 盘中
-============================================================
-  采集市场数据...
-  获取关注股票实时行情(6只)...
-  0%|          | 0/58 [00:00<?, ?it/s]  2%|▏         | 1/58 [00:01<01:31,  1.61s/it]                                                调用 LLM 生成分析...
-  Token 用量已记录: prompt=717, completion=355, total=1072
-  信号已保存: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/10-01-盘中.md
-  完成!
-
-[10:01:00] 盘中信号生成完毕: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/10-01-盘中.md
-/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/multiprocessing/resource_tracker.py:216: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown
-  warnings.warn('resource_tracker: There appear to be %d '
-(eval):1: command not found: python
   已注册任务: 盘前 @ 09:23 (pre_market)
   已注册任务: 盘中 @ 09:58 (intraday)
   已注册任务: 盘中 @ 10:58 (intraday)
   已注册任务: 盘中 @ 12:58 (intraday)
   已注册任务: 盘中 @ 13:58 (intraday)
   已注册任务: 盘尾 @ 14:48 (pre_close)
+  已注册任务: 每日总结 @ 16:56 (daily_summary)
 
 ============================================================
 交易信号调度器已启动
-共 6 个定时任务
+共 7 个定时任务
 信号输出目录: signals/YYYY-MM-DD/
 按 Ctrl+C 停止
 ============================================================
 
 
 ============================================================
-[10:58:00] 开始生成交易信号 - 盘中
-============================================================
-  采集市场数据...
-  0%|          | 0/58 [00:00<?, ?it/s]  2%|▏         | 1/58 [00:01<01:32,  1.62s/it]  3%|▎         | 2/58 [00:02<01:12,  1.30s/it]  5%|▌         | 3/58 [00:09<03:27,  3.78s/it]  7%|▋         | 4/58 [00:10<02:27,  2.73s/it]                                                0%|          | 0/2 [00:00<?, ?it/s]                                       获取关注股票实时行情(6只)...
-  调用 LLM 生成分析...
-  Token 用量已记录: prompt=1901, completion=305, total=2206
-  信号已保存: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/10-58-盘中.md
-  完成!
-
-[10:58:49] 盘中信号生成完毕: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/10-58-盘中.md
-
-============================================================
-[12:58:00] 开始生成交易信号 - 盘中
-============================================================
-  采集市场数据...
-  0%|          | 0/58 [00:00<?, ?it/s]  2%|▏         | 1/58 [00:01<01:20,  1.42s/it]  3%|▎         | 2/58 [00:02<01:11,  1.28s/it]                                                获取关注股票实时行情(6只)...
-  调用 LLM 生成分析...
-  Token 用量已记录: prompt=1905, completion=602, total=2507
-  信号已保存: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/12-58-盘中.md
-  完成!
-
-[12:58:46] 盘中信号生成完毕: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/12-58-盘中.md
-
-============================================================
-[13:58:00] 开始生成交易信号 - 盘中
-============================================================
-  采集市场数据...
-  0%|          | 0/58 [00:00<?, ?it/s]  2%|▏         | 1/58 [00:01<01:10,  1.24s/it]  3%|▎         | 2/58 [00:02<01:06,  1.19s/it]  5%|▌         | 3/58 [00:03<00:59,  1.09s/it]                                                获取关注股票实时行情(6只)...
-  调用 LLM 生成分析...
-  Token 用量已记录: prompt=1901, completion=528, total=2429
-  信号已保存: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/13-58-盘中.md
-  完成!
-
-[13:58:49] 盘中信号生成完毕: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/13-58-盘中.md
-
-============================================================
 [14:48:00] 开始生成交易信号 - 盘尾
 ============================================================
+  检查挂单触价情况...
   采集市场数据...
-  0%|          | 0/58 [00:00<?, ?it/s]                                        0%|          | 0/2 [00:00<?, ?it/s] 50%|█████     | 1/2 [00:01<00:01,  1.67s/it]                                               获取关注股票实时行情(6只)...
+  0%|          | 0/4 [00:00<?, ?it/s] 25%|██▌       | 1/4 [00:01<00:03,  1.31s/it] 50%|█████     | 2/4 [00:02<00:02,  1.04s/it] 75%|███████▌  | 3/4 [00:03<00:00,  1.02it/s]100%|██████████| 4/4 [00:04<00:00,  1.01s/it]                                               全市场扫描候选股(top 15)...
+    全市场扫描: 新浪源成功, 15只候选
+  扫描结果: 15 只候选
+  获取关注股票实时行情(5只)...
   调用 LLM 生成分析...
-  Token 用量已记录: prompt=1919, completion=520, total=2439
-  信号已保存: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/14-48-盘尾.md
+  Token 用量已记录: prompt=11692, completion=382, total=12074
+  信号已保存: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-19/14-50-盘尾.md
   完成!
 
-[14:48:48] 盘尾信号生成完毕: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-18/14-48-盘尾.md
+[14:50:15] 盘尾信号生成完毕: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../signals/2026-03-19/14-50-盘尾.md
+
+============================================================
+[16:56:00] 开始生成每日经验总结
+============================================================
+  收集市场情绪...
+  0%|          | 0/2 [00:00<?, ?it/s] 50%|█████     | 1/2 [00:01<00:01,  1.08s/it]100%|██████████| 2/2 [00:01<00:00,  1.04it/s]                                               加载今日信号...
+  获取关注列表表现...
+  获取账户状态...
+  全市场扫描 TOP20...
+    全市场扫描: 新浪源成功, 20只候选
+  加载策略和经验教训...
+  调用 LLM 生成总结...
+  Token 用量已记录: prompt=11228, completion=2234, total=13462
+  总结已保存: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../docs/daily-summary/2026-03-19.md
+  解析策略迭代建议...
+  策略已回写: v0.3 - 新增“市场广度退潮阈值”一票否决与弱市仓位上限，统一信号口径，避免弱市给出激进买入建议。
+  完成!
+
+[16:57:21] 每日总结生成完毕: /Users/zz/Downloads/claude-workspace/AI-Stock-Trading/src/../docs/daily-summary/2026-03-19.md
