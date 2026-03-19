@@ -113,6 +113,27 @@ def _gather_watchlist_performance(codes):
     return results
 
 
+def _extract_key_strategies(content):
+    """智能提取策略关键章节（用于 summary prompt），避免硬截断丢失重要内容"""
+    if not content:
+        return "暂无"
+    target_headers = [
+        "综合选股流程", "风险管理规则", "形态好", "市场情绪指标",
+        "情绪周期四阶段", "模拟盘交易规则", "策略迭代日志",
+    ]
+    sections = []
+    in_section = False
+    for line in content.split("\n"):
+        if any(h in line for h in target_headers):
+            in_section = True
+        elif line.startswith("## ") and in_section:
+            if not any(h in line for h in target_headers):
+                in_section = False
+        if in_section:
+            sections.append(line)
+    return "\n".join(sections) if sections else content[:5000]
+
+
 def _load_today_logs():
     """加载今日的执行日志和错误日志"""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -251,10 +272,10 @@ def _build_summary_prompt(market_sentiment, today_signals, watchlist_perf,
 {json.dumps(scan_top20, ensure_ascii=False, indent=2, default=str)}
 
 ### 当前策略（memory/strategies.md）
-{strategies[:3000] if strategies else '暂无'}
+{_extract_key_strategies(strategies) if strategies else '暂无'}
 
 ### 经验教训（memory/lessons.md）
-{lessons[:1500] if lessons else '暂无'}
+{lessons if lessons else '暂无'}
 """
 
 

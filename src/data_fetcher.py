@@ -386,14 +386,56 @@ def get_pre_market_minutes(code):
 # ============================================================
 # 个股历史K线
 # ============================================================
-@retry(max_retries=3, delay=2)
 def get_stock_history(code, period="daily", days=120):
-    """获取个股历史K线"""
+    """获取个股历史K线（akshare 主 + 腾讯备份）"""
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     end_date = datetime.now().strftime("%Y%m%d")
-    df = ak.stock_zh_a_hist(symbol=code, period=period,
-                            start_date=start_date, end_date=end_date, adjust="qfq")
-    return df
+    # 主：akshare
+    for attempt in range(3):
+        try:
+            df = ak.stock_zh_a_hist(symbol=code, period=period,
+                                    start_date=start_date, end_date=end_date, adjust="qfq")
+            if df is not None and len(df) > 0:
+                return df
+        except Exception:
+            if attempt < 2:
+                time.sleep(2)
+
+    # 备用：腾讯日K线 API
+    try:
+        df = _get_history_tencent(code, days)
+        if df is not None and len(df) > 0:
+            return df
+    except Exception:
+        pass
+    return None
+
+
+def _get_history_tencent(code, days=120):
+    """腾讯日K接口获取历史K线"""
+    market = "sh" if code.startswith("6") else "sz"
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={market}{code},day,,,{days},qfq"
+    r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+    data = r.json()
+    klines = data.get("data", {}).get(f"{market}{code}", {}).get("qfqday", [])
+    if not klines:
+        klines = data.get("data", {}).get(f"{market}{code}", {}).get("day", [])
+    if not klines:
+        return None
+    rows = []
+    for k in klines:
+        if len(k) >= 6:
+            rows.append({
+                "日期": k[0],
+                "开盘": float(k[1]),
+                "收盘": float(k[2]),
+                "最高": float(k[3]),
+                "最低": float(k[4]),
+                "成交量": float(k[5]) if len(k) > 5 else 0,
+            })
+    if rows:
+        return pd.DataFrame(rows)
+    return None
 
 
 # ============================================================
@@ -506,21 +548,45 @@ def detect_oversold_signal(breadth: dict) -> dict:
 # ============================================================
 # 北向资金（已修复废弃接口）
 # ============================================================
-@retry(max_retries=2, delay=1)
 def get_north_flow():
-    """获取北向资金流向（使用新版接口）"""
+    """获取北向资金流向（akshare 主 + 东财直连备份）"""
+    # 主：akshare 汇总
     try:
         df = ak.stock_hsgt_fund_flow_summary_em()
         north = df[df["资金方向"] == "北向"]
-        return north
+        if north is not None and len(north) > 0:
+            return north
     except Exception:
         pass
-    # 备用：历史数据接口
+    # 备用1：akshare 历史
     try:
         df = ak.stock_hsgt_hist_em(symbol="沪股通")
-        return df.tail(10)
+        if df is not None and len(df) > 0:
+            return df.tail(10)
     except Exception:
-        return None
+        pass
+    # 备用2：东财直连 API
+    try:
+        url = "https://push2.eastmoney.com/api/qt/kamtbs.wss?fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56"
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        data = r.json()
+        items = data.get("data", {}).get("s2n", [])
+        if items:
+            rows = []
+            for item in items[-5:]:  # 最近5天
+                parts = item.split(",")
+                if len(parts) >= 4:
+                    rows.append({
+                        "日期": parts[0],
+                        "沪股通净流入": parts[1],
+                        "深股通净流入": parts[2],
+                        "北向合计": parts[3],
+                    })
+            if rows:
+                return pd.DataFrame(rows)
+    except Exception:
+        pass
+    return None
 
 
 # ============================================================
@@ -618,20 +684,77 @@ def get_stock_individual_fund_flow(code):
 # ============================================================
 # 涨停/跌停/强势股池
 # ============================================================
-@retry(max_retries=2, delay=1)
 def get_limit_up_pool(date=None):
-    """获取涨停股池"""
+    """获取涨停股池（akshare 主 + 新浪全市场自算备份）"""
     if date is None:
         date = datetime.now().strftime("%Y%m%d")
-    return ak.stock_zt_pool_em(date=date)
+    # 主：akshare
+    for attempt in range(2):
+        try:
+            df = ak.stock_zt_pool_em(date=date)
+            if df is not None and len(df) > 0:
+                return df
+        except Exception:
+            if attempt == 0:
+                time.sleep(1)
+
+    # 备份：从新浪全市场数据自算涨停
+    try:
+        all_stocks = _fetch_all_stocks_sina()
+        if all_stocks:
+            mainboard = _filter_mainboard(all_stocks)
+            zt_list = []
+            for s in mainboard:
+                chg = float(s.get("changepercent", 0))
+                if chg >= 9.9:
+                    zt_list.append({
+                        "代码": s.get("code", ""),
+                        "名称": s.get("name", ""),
+                        "涨跌幅": chg,
+                        "最新价": float(s.get("trade", 0)),
+                        "成交额": float(s.get("amount", 0)),
+                        "连板数": 1,  # 新浪数据无连板信息，默认1
+                    })
+            if zt_list:
+                return pd.DataFrame(zt_list)
+    except Exception:
+        pass
+    return None
 
 
-@retry(max_retries=2, delay=1)
 def get_limit_down_pool(date=None):
-    """获取跌停股池"""
+    """获取跌停股池（akshare 主 + 新浪自算备份）"""
     if date is None:
         date = datetime.now().strftime("%Y%m%d")
-    return ak.stock_zt_pool_dtgc_em(date=date)
+    for attempt in range(2):
+        try:
+            df = ak.stock_zt_pool_dtgc_em(date=date)
+            if df is not None and len(df) > 0:
+                return df
+        except Exception:
+            if attempt == 0:
+                time.sleep(1)
+
+    # 备份：从新浪全市场数据自算跌停
+    try:
+        all_stocks = _fetch_all_stocks_sina()
+        if all_stocks:
+            mainboard = _filter_mainboard(all_stocks)
+            dt_list = []
+            for s in mainboard:
+                chg = float(s.get("changepercent", 0))
+                if chg <= -9.9:
+                    dt_list.append({
+                        "代码": s.get("code", ""),
+                        "名称": s.get("name", ""),
+                        "涨跌幅": chg,
+                        "最新价": float(s.get("trade", 0)),
+                    })
+            if dt_list:
+                return pd.DataFrame(dt_list)
+    except Exception:
+        pass
+    return None
 
 
 # ============================================================
