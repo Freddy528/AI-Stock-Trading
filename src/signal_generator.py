@@ -371,8 +371,9 @@ def _get_account_summary():
     pending_info = []
     for o in pending:
         if o.get("status") == "pending":
+            order_type = "挂单买入" if o.get("type", "buy") == "buy" else "挂单卖出"
             pending_info.append(
-                f"挂单买入 {o['name']}({o['code']}) {o['shares']}股 限价¥{o['limit_price']} (创建于{o['created_at'][:10]})"
+                f"{order_type} {o['name']}({o['code']}) {o['shares']}股 限价¥{o['limit_price']} (创建于{o['created_at'][:16]})"
             )
     return {
         "cash": account["cash"],
@@ -387,12 +388,15 @@ def _get_account_summary():
 
 def check_and_settle_pending_orders():
     """
-    检查挂单是否触价成交。
-    逻辑：获取挂单股票的实时行情，若当日最低价 <= 挂单价，则判定成交并执行买入。
+    检查挂单是否触价成交（支持买入和卖出挂单）。
+
+    买入挂单：挂单时间之后最低成交价 <= 限价 → 以限价成交
+    卖出挂单：挂单时间之后最高成交价 >= 限价 → 以限价成交
+
     当日收盘后（15:00后）未成交的挂单自动作废。
     返回：(settled_list, expired_list, still_pending_list)
     """
-    from account import load_account, save_account, buy
+    from account import load_account, save_account, buy, sell
     account = load_account()
     pending_orders = account.get("pending_orders", [])
     if not pending_orders:
@@ -410,57 +414,83 @@ def check_and_settle_pending_orders():
         if order.get("status") != "pending":
             continue
 
+        order_type = order.get("type", "buy")
+
         # 判断是否过期（非今日创建的挂单，或收盘后）
         order_date = order.get("created_at", "")[:10]
         if order_date != today or market_closed:
             order["status"] = "expired"
             expired.append(order)
-            print(f"  ⏰ 挂单过期: {order['name']}({order['code']}) 限价¥{order['limit_price']}")
+            print(f"  ⏰ 挂单过期: {order_type} {order['name']}({order['code']}) 限价¥{order['limit_price']}")
             continue
 
-        # 获取挂单时间之后的最低价（用分时逐笔数据，精确过滤挂单时间）
+        # 获取挂单时间之后的分时数据
+        order_time = order.get("updated_at", order.get("created_at", ""))
+        order_time_str = order_time[11:19] if len(order_time) >= 19 else "00:00:00"
+        low_after_order = None
+        high_after_order = None
+
         try:
             import akshare as ak
-            order_time = order.get("updated_at", order.get("created_at", ""))
-            order_time_str = order_time[11:19] if len(order_time) >= 19 else "00:00:00"  # HH:MM:SS
             df_intraday = ak.stock_intraday_em(symbol=order["code"])
-            # 只看挂单时间之后的成交
             df_after = df_intraday[df_intraday["时间"] >= order_time_str]
             if df_after.empty:
                 still_pending.append(order)
                 continue
             low_after_order = float(df_after["成交价"].min())
+            high_after_order = float(df_after["成交价"].max())
         except Exception as e:
-            print(f"  ⚠️  获取{order['code']}分时数据失败: {e}，回退到实时最低价")
+            print(f"  ⚠️  获取{order['code']}分时数据失败: {e}，回退到实时价")
             try:
                 realtime = get_stock_realtime(order["code"])
                 if realtime is None:
                     still_pending.append(order)
                     continue
-                low_after_order = float(realtime.get("最新价", 9999))
+                current_price = float(realtime.get("最新价", 0) or 0)
+                if current_price <= 0:
+                    still_pending.append(order)
+                    continue
+                # 回退模式：用实时价近似（不完全准确，但能兜底）
+                low_after_order = current_price
+                high_after_order = current_price
             except Exception:
                 still_pending.append(order)
                 continue
 
         limit_price = float(order["limit_price"])
-        if low_after_order <= limit_price:
-            # 触价，执行买入
-            print(f"  ✅ 挂单触价成交: {order['name']}({order['code']}) 挂单后最低价¥{low_after_order} <= 限价¥{limit_price}")
-            success = buy(order["code"], order["name"], limit_price, order["shares"])
-            if success:
-                order["status"] = "filled"
-                order["filled_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
-                order["filled_price"] = limit_price
-                settled.append(order)
+
+        if order_type == "buy":
+            if low_after_order <= limit_price:
+                print(f"  ✅ 买入挂单触价: {order['name']}({order['code']}) 最低¥{low_after_order} <= 限价¥{limit_price}")
+                success = buy(order["code"], order["name"], limit_price, order["shares"])
+                if success:
+                    order["status"] = "filled"
+                    order["filled_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+                    order["filled_price"] = limit_price
+                    settled.append(order)
+                else:
+                    still_pending.append(order)
             else:
+                print(f"  📋 买入挂单未触价: {order['name']}({order['code']}) 最低¥{low_after_order} > 限价¥{limit_price}")
                 still_pending.append(order)
-        else:
-            print(f"  📋 挂单未触价: {order['name']}({order['code']}) 今日最低¥{today_low} > 限价¥{limit_price}")
-            still_pending.append(order)
+
+        elif order_type == "sell":
+            if high_after_order >= limit_price:
+                print(f"  ✅ 卖出挂单触价: {order['name']}({order['code']}) 最高¥{high_after_order} >= 限价¥{limit_price}")
+                success = sell(order["code"], limit_price, order["shares"])
+                if success:
+                    order["status"] = "filled"
+                    order["filled_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+                    order["filled_price"] = limit_price
+                    settled.append(order)
+                else:
+                    still_pending.append(order)
+            else:
+                print(f"  📋 卖出挂单未触价: {order['name']}({order['code']}) 最高¥{high_after_order} < 限价¥{limit_price}")
+                still_pending.append(order)
 
     # 更新 account.json 中的挂单状态
-    account = load_account()  # 重新加载（buy() 可能已修改）
-    # 合并所有订单（已成交/过期保留记录，pending继续）
+    account = load_account()  # 重新加载（buy()/sell() 可能已修改）
     all_orders = []
     for o in pending_orders:
         if o["status"] == "filled":
@@ -826,11 +856,11 @@ def generate_signal(signal_type="intraday", label="盘中"):
     # 7. 保存信号文件
     filepath = _save_signal(signal_type, label, content)
 
-    # 8. 自动执行交易信号（盘前信号仅做分析，不自动执行——集合竞价阶段价格不稳定）
+    # 8. 解析信号 → 规则验证 → 创建挂单（盘前仅分析，不挂单——集合竞价价格不稳定）
     if signal_type == "pre_market":
-        print("  盘前信号：仅分析，不自动执行（集合竞价价格不稳定）")
+        print("  盘前信号：仅分析，不自动挂单（集合竞价价格不稳定）")
     else:
-        print("  执行交易信号...")
+        print("  解析信号 → 创建挂单...")
         try:
             from signal_executor import execute, format_execution_report
             exec_report = execute(content, signal_type)
@@ -838,9 +868,9 @@ def generate_signal(signal_type="intraday", label="盘中"):
             report_text = format_execution_report(exec_report)
             with open(filepath, "a", encoding="utf-8") as f:
                 f.write(report_text)
-            executed_count = len(exec_report.get("executed", []))
+            orders_count = len(exec_report.get("orders_created", []))
             rejected_count = len(exec_report.get("rejected", []))
-            print(f"  执行结果: {executed_count} 笔成功, {rejected_count} 笔被拒绝")
+            print(f"  挂单结果: {orders_count} 笔挂单, {rejected_count} 笔被拒绝")
         except Exception as e:
             print(f"  ⚠️ 信号执行失败: {e}")
 
