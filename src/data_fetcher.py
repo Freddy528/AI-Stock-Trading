@@ -442,29 +442,90 @@ def _get_history_tencent(code, days=120):
 # 市场情绪（主+备）
 # ============================================================
 def _market_breadth_from_sina():
-    """从新浪全市场数据计算涨跌家数（午休/盘前最稳定）"""
+    """从新浪全市场数据计算涨跌家数（午休/盘前最稳定）
+
+    盘前（09:30前）大部分票无成交价，用 require_trade=False 放宽过滤。
+    若有效数据太少（<500只），说明数据尚未就绪，返回 None 让上层降级。
+    """
     all_stocks = _fetch_all_stocks_sina()
     if not all_stocks:
         return None
-    mainboard = _filter_mainboard(all_stocks)
+
+    now = datetime.now()
+    is_pre = (now.hour < 9 or (now.hour == 9 and now.minute < 30))
+
+    mainboard = _filter_mainboard(all_stocks, require_trade=not is_pre)
     total = len(mainboard)
-    if total == 0:
+
+    # 盘前数据量太少说明 API 还没刷新，不如不返回
+    if total < 500:
         return None
+
     up = len([s for s in mainboard if float(s.get("changepercent", 0)) > 0])
     down = len([s for s in mainboard if float(s.get("changepercent", 0)) < 0])
     flat = total - up - down
     limit_up = len([s for s in mainboard if float(s.get("changepercent", 0)) >= 9.9])
     limit_down = len([s for s in mainboard if float(s.get("changepercent", 0)) <= -9.9])
-    return {
-        "source": "新浪",
+
+    result = {
+        "source": "新浪" + ("(盘前)" if is_pre else ""),
         "total": total, "up": up, "down": down, "flat": flat,
         "limit_up": limit_up, "limit_down": limit_down,
         "up_ratio": round(up / total * 100, 1),
     }
 
+    # 合理性校验：如果 up+down 占比太偏（全涨0跌 或 全跌0涨），数据可能有问题
+    if (up + down) > 0 and (up == 0 or down == 0):
+        # 非极端行情下不可能 100% 单边，标记不可靠
+        result["note"] = "数据可能不完整（涨跌极端单边），建议参考其他源"
+        result["unreliable"] = True
+
+    if is_pre:
+        result["note"] = "盘前数据，涨跌幅基于昨收计算，仅供参考"
+
+    return result
+
+
+def _market_breadth_from_tencent():
+    """从腾讯指数接口获取涨跌家数（极轻量，1次HTTP请求，盘前/午休均可用）
+
+    腾讯上证指数字段 [41]=涨家数 [42]=跌家数（含全市场所有板），
+    作为快速备用源，数据包含科创/创业板，但涨跌比例仍有参考价值。
+    """
+    try:
+        url = "https://qt.gtimg.cn/q=sh000001"
+        r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        r.encoding = "gbk"
+        parts = r.text.strip().rstrip(";").split("~")
+        if len(parts) < 43:
+            return None
+
+        up_raw = float(parts[41])
+        down_raw = float(parts[42])
+        total = int(up_raw) + int(down_raw)
+        if total < 100:
+            return None
+
+        up = int(up_raw)
+        down = int(down_raw)
+        idx_price = float(parts[3]) if parts[3] else 0
+        idx_chg = float(parts[32]) if parts[32] else 0
+
+        return {
+            "source": "腾讯(全市场)",
+            "total": total, "up": up, "down": down, "flat": 0,
+            "limit_up": 0, "limit_down": 0,  # 腾讯指数不提供涨跌停数
+            "up_ratio": round(up / total * 100, 1) if total > 0 else 0,
+            "index_price": idx_price,
+            "index_change_pct": idx_chg,
+            "note": "腾讯全市场涨跌（含创业板/科创板），涨跌停数据需从其他源获取",
+        }
+    except Exception:
+        return None
+
 
 def get_market_sentiment():
-    """获取市场情绪指标，优先新浪（最稳定），akshare备用"""
+    """获取市场情绪指标，多层 fallback：新浪 → 腾讯 → 东财akshare → 前一交易日"""
     result = {}
 
     # 涨跌家数统计：优先新浪（午休/盘前不卡），失败再 akshare
@@ -474,6 +535,18 @@ def get_market_sentiment():
     except Exception:
         pass
 
+    # 如果新浪数据不可靠，继续尝试备用源
+    if breadth is not None and breadth.get("unreliable"):
+        breadth = None
+
+    # 备用1: 腾讯指数（极轻量，1次HTTP，盘前/午休都能用）
+    if breadth is None:
+        try:
+            breadth = _market_breadth_from_tencent()
+        except Exception:
+            pass
+
+    # 备用2: 东方财富 akshare 全市场
     if breadth is None:
         try:
             df = _get_spot_akshare()
@@ -493,20 +566,40 @@ def get_market_sentiment():
             pass
 
     if breadth is None:
-        # 最后备用：北向汇总（部分数据）
+        # 备用2：东方财富 akshare 全市场实时
         try:
-            df = ak.stock_hsgt_fund_flow_summary_em()
-            row = df[df["板块"] == "沪股通"].iloc[0]
-            breadth = {
-                "source": "北向汇总(仅沪股通)",
-                "up": int(row.get("上涨数", 0)),
-                "down": int(row.get("下跌数", 0)),
-                "flat": int(row.get("持平数", 0)),
-            }
+            df = _get_spot_akshare()
+            # 盘前 akshare 也可能返回全0，检查有效性
+            if df is not None and not df.empty:
+                valid = df[df["最新价"] > 0] if "最新价" in df.columns else df
+                if len(valid) > 500:
+                    total = len(valid)
+                    up = len(valid[valid["涨跌幅"] > 0])
+                    down = len(valid[valid["涨跌幅"] < 0])
+                    flat = total - up - down
+                    limit_up = len(valid[valid["涨跌幅"] >= 9.9])
+                    limit_down = len(valid[valid["涨跌幅"] <= -9.9])
+                    breadth = {
+                        "source": "东方财富",
+                        "total": total, "up": up, "down": down, "flat": flat,
+                        "limit_up": limit_up, "limit_down": limit_down,
+                        "up_ratio": round(up / total * 100, 1),
+                    }
+        except Exception:
+            pass
+
+    if breadth is None:
+        # 备用3：前一交易日数据兜底（盘前总比没有强）
+        try:
+            breadth = _get_prev_day_breadth()
         except Exception:
             pass
 
     if breadth:
+        # 如果广度数据缺少涨跌停数（如来自腾讯），多层补充
+        if breadth.get("limit_up", 0) == 0 and breadth.get("limit_down", 0) == 0:
+            _supplement_limit_counts(breadth)
+
         result["market_breadth"] = breadth
         # 超跌信号检测
         oversold = detect_oversold_signal(breadth)
@@ -520,6 +613,68 @@ def get_market_sentiment():
     result.update(index_data)
 
     return result
+
+
+def _supplement_limit_counts(breadth: dict):
+    """补充涨跌停数到 breadth dict（多层 fallback）
+
+    优先 akshare 涨跌停池（独立API，不依赖全市场快照），
+    再尝试新浪全市场数据自算。
+    """
+    # 方式1: akshare 涨停/跌停池（最可靠，独立接口）
+    try:
+        today = datetime.now().strftime("%Y%m%d")
+        df_up = ak.stock_zt_pool_em(date=today)
+        lu = len(df_up) if df_up is not None else 0
+        # 跌停
+        try:
+            df_down = ak.stock_zt_pool_dtgc_em(date=today)
+            ld = len(df_down) if df_down is not None else 0
+        except Exception:
+            ld = 0
+        breadth["limit_up"] = lu
+        breadth["limit_down"] = ld
+        breadth["limit_source"] = "akshare涨跌停池"
+        return
+    except Exception:
+        pass
+
+    # 方式2: 新浪全市场自算（新浪可能被限流，午休/盘前不可靠）
+    try:
+        all_stocks = _fetch_all_stocks_sina()
+        if all_stocks and len(all_stocks) > 500:
+            lu = len([s for s in all_stocks
+                      if float(s.get("changepercent", 0)) >= 9.9
+                      and "ST" not in s.get("name", "")])
+            ld = len([s for s in all_stocks
+                      if float(s.get("changepercent", 0)) <= -9.9
+                      and "ST" not in s.get("name", "")])
+            breadth["limit_up"] = lu
+            breadth["limit_down"] = ld
+            breadth["limit_source"] = "新浪自算"
+            return
+    except Exception:
+        pass
+
+
+def _get_prev_day_breadth():
+    """获取前一交易日的涨跌数据作为兜底（盘前所有实时源都失败时使用）"""
+    try:
+        # 用上证指数历史判断前一交易日情况
+        df = ak.stock_zh_index_daily_em(symbol="sh000001")
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            change = float(last.get("涨跌幅", 0))
+            return {
+                "source": "前一交易日(兜底)",
+                "note": f"前一交易日上证涨跌幅{change:+.2f}%，实时广度数据暂不可用",
+                "total": 0, "up": 0, "down": 0, "flat": 0,
+                "limit_up": 0, "limit_down": 0, "up_ratio": 0,
+                "prev_day_index_change": change,
+            }
+    except Exception:
+        pass
+    return None
 
 
 def detect_oversold_signal(breadth: dict) -> dict:
@@ -638,9 +793,15 @@ def _get_sector_flow_sina():
 
 
 def get_sector_flow():
-    """获取板块资金流向，午休优先新浪，正常时段三级 fallback"""
-    # 午休直接走新浪（akshare在午休全线不稳定）
-    if _is_lunch_break():
+    """获取板块资金流向，盘前/午休优先新浪，正常时段三级 fallback
+
+    盘前(09:30前)资金流数据不可用，优先用新浪板块涨跌排行替代。
+    """
+    now = datetime.now()
+    is_pre = (now.hour < 9 or (now.hour == 9 and now.minute < 30))
+
+    # 盘前 / 午休优先走新浪（akshare 在这些时段返回 NaN / 全线不稳定）
+    if is_pre or _is_lunch_break():
         try:
             result = _get_sector_flow_sina()
             if result is not None:
@@ -652,7 +813,12 @@ def get_sector_flow():
     try:
         df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
         if df is not None and not df.empty:
-            return df.head(20)
+            # 检查是否全 NaN（盘前可能返回框架但值全空）
+            numeric_cols = df.select_dtypes(include='number').columns
+            if numeric_cols.any() and df[numeric_cols].dropna(how='all').empty:
+                pass  # 全 NaN，跳过
+            else:
+                return df.head(20)
     except Exception:
         pass
     # 备用1：akshare行业板块涨跌排名
@@ -862,18 +1028,29 @@ def _fetch_all_stocks_sina():
     return all_stocks
 
 
-def _filter_mainboard(stocks):
-    """过滤出沪深主板非ST股票"""
-    return [s for s in stocks if
-            "ST" not in s.get("name", "") and
-            "退" not in s.get("name", "") and
-            not s["code"].startswith("688") and
-            not s["code"].startswith("300") and
-            not s["code"].startswith("301") and
-            not s["code"].startswith("8") and
-            not s["code"].startswith("9") and
-            not s["code"].startswith("4") and
-            float(s.get("trade", 0)) > 0]
+def _filter_mainboard(stocks, require_trade=True):
+    """过滤出沪深主板非ST股票
+
+    require_trade=True: 要求有成交价（盘中使用）
+    require_trade=False: 不要求成交价（盘前使用，用昨收settlement代替判断）
+    """
+    result = []
+    for s in stocks:
+        if "ST" in s.get("name", "") or "退" in s.get("name", ""):
+            continue
+        code = s.get("code", "")
+        if (code.startswith("688") or code.startswith("300") or code.startswith("301")
+                or code.startswith("8") or code.startswith("9") or code.startswith("4")):
+            continue
+        if require_trade:
+            if float(s.get("trade", 0)) <= 0:
+                continue
+        else:
+            # 盘前模式：只要有昨收价或成交价就算有效
+            if float(s.get("trade", 0)) <= 0 and float(s.get("settlement", 0)) <= 0:
+                continue
+        result.append(s)
+    return result
 
 
 def _score_candidate(code, name, price, change_pct, turnover, amount, high, low,
